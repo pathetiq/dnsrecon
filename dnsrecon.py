@@ -35,9 +35,14 @@ import os
 import string
 import sqlite3
 import datetime
+import sys
 
 import netaddr
 
+
+# In order to comply with FHS, we need to change the path
+
+sys.path.append('/usr/share/dnsrecon')
 
 # Manage the change in Python3 of the name of the Queue Library
 try:
@@ -277,9 +282,9 @@ def brute_tlds(res, domain, verbose=False):
 
     # tlds taken from http://data.iana.org/TLD/tlds-alpha-by-domain.txt
     gtld = ['co', 'com', 'net', 'biz', 'org']
-    tlds = ['ac', 'ad', 'ae', 'aero', 'af', 'ag', 'ai', 'al', 'am', 'an', 'ao', 'aq', 'ar',
+    tlds = ['ac', 'ad', 'aeaero', 'af', 'ag', 'ai', 'al', 'am', 'an', 'ao', 'aq', 'ar',
             'arpa', 'as', 'asia', 'at', 'au', 'aw', 'ax', 'az', 'ba', 'bb', 'bd', 'be', 'bf', 'bg',
-            'bh', 'bi', 'biz', 'bj', 'bm', 'bn', 'bo', 'br', 'bs', 'bt', 'bv', 'bw', 'by', 'bz', 'ca',
+            'bh', 'bi', 'biz', 'bj', 'bm', 'bn', 'bo', 'br', 'bs', 'bt', 'bv', 'bw', 'by', 'bzca',
             'cat', 'cc', 'cd', 'cf', 'cg', 'ch', 'ci', 'ck', 'cl', 'cm', 'cn', 'co', 'com', 'coop',
             'cr', 'cu', 'cv', 'cx', 'cy', 'cz', 'de', 'dj', 'dk', 'dm', 'do', 'dz', 'ec', 'edu', 'ee',
             'eg', 'er', 'es', 'et', 'eu', 'fi', 'fj', 'fk', 'fm', 'fo', 'fr', 'ga', 'gb', 'gd', 'ge',
@@ -328,6 +333,83 @@ def brute_tlds(res, domain, verbose=False):
     print_good("{0} Records Found".format(len(found_tlds)))
 
     return found_tlds
+
+
+def force_enum(res, domain, type=0, length=3, verbose=False):
+    """
+    Brute-forcing all value of alphanum(with _ and -) or a length received or 3 by default
+    """
+
+    global brtdata
+    brtdata = []
+    returned_records = []
+    full_list = 'abcdefghijklmnopqrstuvwxyz0123456789_-'
+    alpha_list = 'abcdefghijklmnopqrstuvwxyz_-'
+    num_list = '0123456789_-'
+    complete_list = []
+    found_hosts = []
+
+    #casting the length
+    length = int(length)
+    type = int(type)
+
+    #Decide which list to use
+    if type == 0:
+      your_list = full_list
+    elif type == 1:
+      your_list = alpha_list
+    elif type == 2:
+      your_list = num_list
+    else:
+      your_list = full_list
+
+    # Thread brute-force.
+    try:
+      # Loop through the brute force function to enumerate all value of the list
+      for current in xrange(length):
+            a = [i for i in your_list]
+            
+            if length == 1:
+               for i in your_list:
+                  if verbose:
+                      print_status("Trying {0}".format(str(i).strip() + '.' + domain.strip()))
+                  target = str(i).strip() + '.' + domain.strip()
+                  pool.add_task(res.get_ip, target)
+               break
+
+            for y in xrange(current):
+              for i in your_list:
+                 for x in a:
+                   if verbose:
+                     print_status("Trying {0}".format(str(x+i).strip() + '.' + domain.strip()))
+                   target = str(x+i).strip() + '.' + domain.strip()
+                   pool.add_task(res.get_ip, target)
+
+            # Wait for threads to finish
+            pool.wait_completion()
+
+    except (KeyboardInterrupt):
+      exit_brute(pool)
+
+    # Process the output of the threads.
+    for rcd_found in brtdata:
+       for rcd in rcd_found:
+           if re.search(r'^A', rcd[0]):
+                # Filter Records if filtering was enabled
+                if filter:
+                    found_hosts.extend([{'type': rcd[0], 'name': rcd[1], 'address': rcd[2]}])
+                else:
+                    found_hosts.extend([{'type': rcd[0], 'name': rcd[1], 'address': rcd[2]}])
+           elif re.search(r'^CNAME', rcd[0]):
+                found_hosts.extend([{'type': rcd[0], 'name': rcd[1], 'target': rcd[2]}])
+
+    # Clear Global variable
+    brtdata = []
+
+    print_good("{0} Records Found".format(len(found_hosts)))
+    return found_hosts
+
+
 
 
 def brute_srv(res, domain, verbose=False):
@@ -446,21 +528,21 @@ def brute_domain(res, dict, dom, filter=None, verbose=False, ignore_wildcard=Fal
         # Check if Dictionary file exists
 
         if os.path.isfile(dict):
-            with open(dict) as f:
+            f = open(dict, 'r+')
 
-                # Thread brute-force.
-                try:
-                    for line in f:
-                        if verbose:
-                            print_status("Trying {0}".format(line.strip() + '.' + dom.strip()))
-                        target = line.strip() + '.' + dom.strip()
-                        pool.add_task(res.get_ip, target)
+            # Thread brute-force.
+            try:
+                for line in f:
+                    if verbose:
+                        print_status("Trying {0}".format(line.strip() + '.' + dom.strip()))
+                    target = line.strip() + '.' + dom.strip()
+                    pool.add_task(res.get_ip, target)
 
-                    # Wait for threads to finish
-                    pool.wait_completion()
+                # Wait for threads to finish
+                pool.wait_completion()
 
-                except (KeyboardInterrupt):
-                    exit_brute(pool)
+            except (KeyboardInterrupt):
+                exit_brute(pool)
 
         # Process the output of the threads.
         for rcd_found in brtdata:
@@ -488,39 +570,38 @@ def in_cache(dict_file, ns):
     type of records for a given domain are in it's cache.
     """
     found_records = []
-    with open(dict_file) as f:
+    f = open(dict_file, 'r+')
+    for zone in f:
+        dom_to_query = str.strip(zone)
+        query = dns.message.make_query(dom_to_query, dns.rdatatype.A, dns.rdataclass.IN)
+        query.flags ^= dns.flags.RD
+        answer = dns.query.udp(query, ns)
+        if len(answer.answer) > 0:
+            for an in answer.answer:
+                for rcd in an:
+                    if rcd.rdtype == 1:
+                        print_status("\tName: {0} TTL: {1} Address: {2} Type: A".format(an.name, an.ttl, rcd.address))
 
-        for zone in f:
-            dom_to_query = str.strip(zone)
-            query = dns.message.make_query(dom_to_query, dns.rdatatype.A, dns.rdataclass.IN)
-            query.flags ^= dns.flags.RD
-            answer = dns.query.udp(query, ns)
-            if len(answer.answer) > 0:
-                for an in answer.answer:
-                    for rcd in an:
-                        if rcd.rdtype == 1:
-                            print_status("\tName: {0} TTL: {1} Address: {2} Type: A".format(an.name, an.ttl, rcd.address))
+                        found_records.extend([{'type': "A", 'name': an.name,
+                                               'address': rcd.address, 'ttl': an.ttl}])
 
-                            found_records.extend([{'type': "A", 'name': an.name,
-                                                   'address': rcd.address, 'ttl': an.ttl}])
+                    elif rcd.rdtype == 5:
+                        print_status("\tName: {0} TTL: {1} Target: {2} Type: CNAME".format(an.name, an.ttl, rcd.target))
+                        found_records.extend([{'type': "CNAME", 'name': an.name,
+                                               'target': rcd.target, 'ttl': an.ttl}])
 
-                        elif rcd.rdtype == 5:
-                            print_status("\tName: {0} TTL: {1} Target: {2} Type: CNAME".format(an.name, an.ttl, rcd.target))
-                            found_records.extend([{'type': "CNAME", 'name': an.name,
-                                                   'target': rcd.target, 'ttl': an.ttl}])
-
-                        else:
-                            print_status()
+                    else:
+                        print_status()
     return found_records
 
 
 def scrape_google(dom):
     """
-    Function for enumerating sub-domains and hosts by scraping Google.
+    Function for enumerating sub-domains and hosts by scrapping Google.
     """
     results = []
     filtered = []
-    searches = ["0","100", "200", "300", "400", "500"]
+    searches = ["100", "200", "300", "400", "500"]
     data = ""
     urllib._urlopener = AppURLopener()
 
@@ -528,9 +609,6 @@ def scrape_google(dom):
         url = "http://google.com/search?hl=en&lr=&ie=UTF-8&q=%2B" + dom + "&start=" + n + "&sa=N&filter=0&num=100"
         sock = urllib.urlopen(url)
         data += sock.read()
-        if re.search('Our systems have detected unusual traffic from your computer network',data) != None:
-          print_error("Google has detected the search as \'bot activity, stopping search...")
-          return 
         sock.close()
     results.extend(unique(re.findall("htt\w{1,2}:\/\/([^:?]*[a-b0-9]*[^:?]*\." + dom + ")\/", data)))
 
@@ -548,8 +626,6 @@ def goo_result_process(res, found_hosts):
     with all the results found.
     """
     returned_records = []
-    if found_hosts == None:
-        return None
     for sd in found_hosts:
         for sdip in res.get_ip(sd):
             if re.search(r'^A|CNAME', sdip[0]):
@@ -1323,7 +1399,10 @@ def usage():
     print("                                          all with file containing the domains, file given with -D option.")
     print("                                tld       Remove the TLD of given domain and test against all TLDs registered in IANA.")
     print("                                zonewalk  Perform a DNSSEC zone walk using NSEC records.")
+    print("                                force     Brute force all values of alpha/num/alphanum of length N for a given domain")
     print("   -a                           Perform AXFR with standard enumeration.")
+    print("   -l, --length      <number>   Length of the brt force option. Default=3")
+    print("   -k, --charset     <type>     Type of charset to bruteforce with:  0:alphanumeric, 1:alpha, 2:numeric")
     print("   -s                           Perform a reverse lookup of IPv4 ranges in the SPF record with standard enumeration.")
     print("   -g                           Perform Google enumeration with standard enumeration.")
     print("   -w                           Perform deep whois record analysis and reverse lookup of IP ranges found through")
@@ -1369,6 +1448,8 @@ def main():
     wildcard_filter = False
     verbose = False
     ignore_wildcardrr = False
+    lengthforce = 3
+    charset = 0
 
     #
     # Global Vars
@@ -1380,7 +1461,7 @@ def main():
     # Define options
     #
     try:
-        options, args = getopt.getopt(sys.argv[1:], 'hzd:n:x:D:t:aq:gwr:fsc:vj:',
+        options, args = getopt.getopt(sys.argv[1:], 'hzd:n:x:l:k:D:t:aq:gwr:fsc:vj:',
                                       ['help',
                                        'zone_walk'
                                        'domain=',
@@ -1434,6 +1515,12 @@ def main():
         elif opt in ('-x', '--xml'):
             output_file = arg
 
+        elif opt in ('-l','--length'):
+            lengthforce = arg
+
+        elif opt in ('-k','--charset'):
+            charset = arg
+
         elif opt in ('-D', '--dictionary'):
             #Check if the dictionary file exists
             if os.path.isfile(arg):
@@ -1452,7 +1539,7 @@ def main():
             else:
                 print_error('Failed CIDR or Range is Required for type rvl')
 
-        elif opt in ('--threads'):
+        elif opt in ('--theads'):
             thread_num = int(arg)
 
         elif opt in ('--lifetime'):
@@ -1502,7 +1589,7 @@ def main():
     # Set the resolver
     res = DnsHelper(domain, ns_server, request_timeout)
 
-    domain_req = ['axfr', 'std', 'srv', 'tld', 'goo', 'zonewalk']
+    domain_req = ['axfr', 'std', 'srv', 'tld', 'goo', 'zonewalk','force']
     scan_info = [" ".join(sys.argv), str(datetime.datetime.now())]
 
     if type is not None:
@@ -1558,6 +1645,14 @@ def main():
                     else:
                         print_error('Could not execute a brute force enumeration. A domain was not given.')
                         sys.exit(1)
+
+                elif r == 'force':
+                    print_status("Performing Domain Brute Force with a defined charset:".format(domain))
+                    force_enum_records = force_enum(res, domain, charset, lengthforce, verbose)
+
+                    if (output_file is not None) or (results_db is not None) or (csv_file is not None) or (json_file is not None):
+                        returned_records.extend(force_enum_records)
+
 
                 elif r == 'srv':
                     print_status('Enumerating Common SRV Records against {0}'.format(domain))
@@ -1636,8 +1731,8 @@ def main():
     elif domain is not None:
         try:
             print_status("Performing General Enumeration of Domain: {0}".format(domain))
-            std_enum_records = general_enum(res, domain, xfr, goo,
-                                            spf_enum, do_whois, zonewalk)
+            std_enum_records = std_enum_records = general_enum(res, domain, xfr, goo,
+                                                               spf_enum, do_whois, zonewalk)
 
             returned_records.extend(std_enum_records)
 
